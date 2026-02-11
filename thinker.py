@@ -84,15 +84,6 @@ class Thinker:
         for i, seq in enumerate(legal_sequences[:40]):
             desc = describe_sequence(seq["steps"])
             line = f"[{i}] {desc}"
-
-            if graph:
-                action_ids = tuple(str(s["action_id"]) for s in seq["steps"])
-                action_sig = signature_hash(action_ids)
-                stats = graph.get_sequence_stats(action_sig)
-                if stats is not None and stats['total'] >= 3:
-                    winrate = stats['wins'] / stats['total'] * 100
-                    line += f" ({winrate:.0f}% WR, n={stats['total']})"
-
             lines.append(line)
         choices_text = "\n".join(lines)
 
