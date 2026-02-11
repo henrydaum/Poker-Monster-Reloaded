@@ -3,11 +3,11 @@ import os
 import logging
 from pathlib import Path
 
-from poker_monster.engine import GameEngine, PHASE_AWAITING_INPUT, PHASE_CHOOSING_FROM_DECK_TOP2, PHASE_CHOOSING_ULTIMATUM_CARD, PHASE_REORDERING_DECK_TOP3, PHASE_DISCARDING_CARD_FROM_OPP_HAND
+from poker_monster.engine import GameEngine, PHASE_AWAITING_INPUT, PHASE_CHOOSING_FROM_DECK_TOP2, PHASE_CHOOSING_ULTIMATUM_CARD, PHASE_REORDERING_DECK_TOP3, PHASE_DISCARDING_CARD_FROM_OPP_HAND, PHASE_SELECTING_GRAVEYARD_CARD
 from graph import KnowledgeGraph, StepInfo
 from services.embedClass import SentenceTransformerEmbedder
-from services.llmClass import OpenAILLM
-from thinker import Thinker
+from services.llmClass import OpenAILLM, LMStudioLLM
+from thinker import Thinker, describe_sequence
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -20,12 +20,14 @@ SEQUENCE_BOUNDARIES = [
     PHASE_CHOOSING_ULTIMATUM_CARD,
     PHASE_REORDERING_DECK_TOP3,
     PHASE_DISCARDING_CARD_FROM_OPP_HAND,
+    PHASE_SELECTING_GRAVEYARD_CARD
 ]
 
 if __name__ == "__main__":
-    embedder = SentenceTransformerEmbedder("BAAI/bge-small-en-v1.5")
-    embedder.load()
-    llm = OpenAILLM("gpt-4o-mini")
+    embedder = SentenceTransformerEmbedder("qwen2.5-7b-instruct")
+    # embedder.load()
+    # llm = OpenAILLM("gpt-4o-mini")
+    llm = LMStudioLLM("gemma-3-4b-it@q4_k_s")
     llm.load()
 
     thinker = Thinker(embedder, llm)
@@ -33,7 +35,7 @@ if __name__ == "__main__":
     hero_graph = KnowledgeGraph(db_path=BASE_DIR / "hero_graph.db")
     monster_graph = KnowledgeGraph(db_path=BASE_DIR / "monster_graph.db")
 
-    NUM_GAMES = 1
+    NUM_GAMES = 20
     for i in range(NUM_GAMES):
         hero_graph.start_new_episode()
         monster_graph.start_new_episode()
@@ -44,7 +46,7 @@ if __name__ == "__main__":
         }
 
         engine = GameEngine()
-        engine.reset(hero_type="computer_random", monster_type="computer_ai")
+        engine.reset(hero_type="computer_ai", monster_type="computer_ai")
 
         pending_steps = {
             "hero": None,
@@ -62,8 +64,8 @@ if __name__ == "__main__":
             current_graph = graphs[current_player]
 
             gamestate_text, actions_text = engine.get_display_text()
-            print(gamestate_text)
-            print(actions_text)
+            # print(gamestate_text)
+            # print(actions_text)
 
             # Record the previous step (now that we know dst)
             prev_step = pending_steps[current_player]
@@ -90,11 +92,19 @@ if __name__ == "__main__":
 
                 # If no active sequence, choose a new one
                 if not remaining:
-                    all_sequences = current_graph.get_unique_sequences()
-                    legal_sequences = engine.get_legal_sequences(all_sequences)
+                    legal_sequences = engine.get_legal_sequences(SEQUENCE_BOUNDARIES)
+                    # Print gamestate text
+                    print(gamestate_text)
+                    # Print sequence options
+                    lines = []
+                    for i, seq in enumerate(legal_sequences):
+                        desc = describe_sequence(seq["steps"])
+                        lines.append(f"[{i}] {desc}")
+                    choices_text = "\n".join(lines)
+                    print(choices_text)
 
                     if len(legal_sequences) > 1:
-                        chosen = thinker.choose_sequence(legal_sequences, gamestate_text)
+                        chosen = thinker.choose_sequence(legal_sequences, gamestate_text, current_graph)
                     elif len(legal_sequences) == 1:
                         chosen = legal_sequences[0]
                     else:
@@ -110,6 +120,37 @@ if __name__ == "__main__":
                     action_id = int(remaining.pop(0)["action_id"])
                     active_sequences[current_player] = remaining
                 else:
+                    print("[WARNING] Taking random action")
+                    legal_actions = engine.get_legal_actions(actions_text)
+                    action_id = random.choice(legal_actions)
+            
+            elif engine.gs.me.player_type == "human":
+                remaining = active_sequences[current_player]
+                if not remaining:
+                    legal_sequences = engine.get_legal_sequences(SEQUENCE_BOUNDARIES)
+                    # Print gamestate text
+                    print(gamestate_text)
+                    # Print sequence options
+                    lines = []
+                    for i, seq in enumerate(legal_sequences):
+                        desc = describe_sequence(seq["steps"])
+                        lines.append(f"[{i}] {desc}")
+                    choices_text = "\n".join(lines)
+                    print(choices_text)
+
+                    chosen = input("Choose a play: ")
+
+                    if chosen.isdigit():
+                        remaining = list(legal_sequences[int(chosen)]["steps"])
+                    else:
+                        remaining = None
+
+                # Consume next step from sequence
+                if remaining:
+                    action_id = int(remaining.pop(0)["action_id"])
+                    active_sequences[current_player] = remaining
+                else:
+                    print("[WARNING] Taking random action")
                     legal_actions = engine.get_legal_actions(actions_text)
                     action_id = random.choice(legal_actions)
 
@@ -124,7 +165,7 @@ if __name__ == "__main__":
                 pending_steps[current_player] = current_step
             else:
                 # Sequence went stale (shouldn't happen, but be safe)
-                print(f"Illegal action: {action_str}. Reason: {reason}")
+                print(f"[ERROR] Illegal action: {action_str}. Reason: {reason}")
                 active_sequences[current_player] = []  # abandon sequence
 
         # --- Game over: record final pending steps ---

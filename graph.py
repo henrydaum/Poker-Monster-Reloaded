@@ -27,6 +27,7 @@ class KnowledgeGraph:
 
         self.current_episode_id = None
         self.current_sequence_id = None
+        self.current_sequence_start_phase = None
         self.step_counter = 0
 
     def init_db(self):
@@ -119,8 +120,9 @@ class KnowledgeGraph:
         """, (self.current_episode_id, ))
         self.conn.commit()
 
-    def start_new_sequence(self):
+    def start_new_sequence(self, start_phase):
         self.current_sequence_id = str(uuid.uuid4())
+        self.current_sequence_start_phase = start_phase
         self.conn.execute("""
             INSERT INTO sequences (sequence_id, episode_id)
             VALUES (?, ?)
@@ -133,7 +135,7 @@ class KnowledgeGraph:
         self.create_node(step.dst_id)
 
         if self.current_sequence_id is None:
-            self.start_new_sequence()
+            self.start_new_sequence(step.src_id)
 
         self.conn.execute("""
             INSERT INTO steps (episode_id, sequence_id, step_num, src_id, action_id, dst_id, src_text, action_text, dst_text)
@@ -142,10 +144,14 @@ class KnowledgeGraph:
         
         self.step_counter += 1
 
-        # Close sequence when boundary is reached
-        if step.dst_id in boundaries:
-            # Store the signature for pattern matching
-            self.finalize_sequence()
+        if self.current_sequence_start_phase == PHASE_AWAITING_INPUT:
+            # Normal behavior: Close at any boundary
+            if step.dst_id in boundaries:
+                self.finalize_sequence()
+        else:
+            # Special behavior: Close boundary at any *other* boundary
+            if step.dst_id != self.current_sequence_start_phase:
+                self.finalize_sequence()
 
         self.conn.commit()
 
@@ -220,7 +226,7 @@ class KnowledgeGraph:
             ORDER BY step_num ASC
         """, (self.current_sequence_id,)).fetchall()
 
-        sig = tuple((s["src_id"], s["action_id"], s["dst_id"]) for s in steps)
+        sig = tuple(s["action_id"] for s in steps)
         sig_hash = signature_hash(sig)
 
         self.conn.execute("""
@@ -230,27 +236,26 @@ class KnowledgeGraph:
 
         self.current_sequence_id = None
 
-    def get_unique_sequences(self):
-        """Get one example of each unique sequence pattern with its steps."""
+    def get_sequence_stats(self, signature: str) -> dict | None:
+        """Get historical win/loss stats for sequences matching this action pattern."""
         rows = self.conn.execute("""
-            SELECT sequence_id, signature
-            FROM sequences
-            WHERE signature IS NOT NULL
-            GROUP BY signature
-        """).fetchall()
+            SELECT e.outcome
+            FROM sequences s
+            JOIN episodes e ON s.episode_id = e.episode_id
+            WHERE s.signature = ?
+        """, (signature,)).fetchall()
 
-        results = []
-        for row in rows:
-            steps = self.conn.execute("""
-                SELECT src_id, action_id, dst_id, src_text, action_text, dst_text
-                FROM steps WHERE sequence_id = ?
-                ORDER BY step_num ASC
-            """, (row["sequence_id"],)).fetchall()
+        if not rows:
+            return None
 
-            results.append({
-                "signature": row["signature"],
-                "sequence_id": row["sequence_id"],
-                "steps": [dict(s) for s in steps],
-            })
+        outcomes = [r["outcome"] for r in rows]
+        wins = sum(1 for o in outcomes if o > 0)
+        losses = sum(1 for o in outcomes if o < 0)
+        avg = sum(outcomes) / len(outcomes)
 
-        return results
+        return {
+            "wins": wins,
+            "losses": losses,
+            "avg_reward": round(avg, 3),
+            "total": len(outcomes),
+        }

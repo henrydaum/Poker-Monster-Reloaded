@@ -262,14 +262,13 @@ class OpenAILLM(BaseLLM):
         
         return [{"role": "user", "content": content_list}]
 
-    def invoke(self, prompt, image_paths=[], attached_image_path=None, temperature=1.0, response_format="text"):
+    def invoke(self, prompt, image_paths=[], attached_image_path=None, temperature=1.0):
         try:
             messages = self.prepare_chat(prompt, image_paths, attached_image_path)
-            response = self.client.chat.completions.parse(
+            response = self.client.chat.completions.create(
                 model=self.model_name,
                 messages=messages,
-                temperature=temperature,
-                response_format=response_format
+                temperature=temperature
             )
             return response.choices[0].message.content
         except Exception as e:

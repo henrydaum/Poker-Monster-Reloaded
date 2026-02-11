@@ -33,8 +33,7 @@ class Player:
             #print("Last Stand buff wore off")
 
     def end_turn(self, gs):
-        if gs.turn_number == 0:
-            self.power = 0
+        self.power = 0
         gs.pass_priority()
 
     def draw(self, qty=1):

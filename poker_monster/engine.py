@@ -183,97 +183,6 @@ def create_action(gs, action_id):
 # for i in range(num_actions):
 #     print(f"Action {i}: {ACTION_MAP[i][j] if ACTION_MAP[i][j] else 'None'}")
 
-def display_gamestate(gs):
-    lines = []
-    sort_key = lambda card: card.name  # or uid
-
-    # Red and purple for Monser, green and yellow for hero
-    if gs.turn_priority == "monster":
-        lines.append(f"{gs.turn_priority.upper()}'s TURN (Turn {gs.turn_number})")
-    else:
-        lines.append(f"{gs.turn_priority.upper()}'s TURN (Turn {gs.turn_number})")
-    lines.append(f"Game Phase: {gs.game_phase}")
-    lines.append(f"My Health: {gs.me.health} | My Deck Size: {len(gs.me.deck)} | My Power: {gs.me.power}")
-    lines.append(f"Opp Health: {gs.opp.health} | Opp Deck Size: {len(gs.opp.deck)} | Opp Hand Size: {len(gs.opp.hand)} | Opp Power Cards: {len(gs.opp.power_cards)}")
-
-    # These are for extra info not always present
-    # Noble Sacrifice hand reveal
-    if gs.game_phase == PHASE_DISCARDING_CARD_FROM_OPP_HAND:  
-        lines.append(f"Opp hand: {[card.name for card in sorted(gs.opp.hand, key=sort_key)]}")
-    # Peek top2 reveal
-    if gs.game_phase == "choosing from Peek":
-        top2 = gs.me.deck[:2]
-        lines.append(f"My deck top 2 cards: {[card.name for card in sorted(top2, key=sort_key)]}")
-    # Ultimatum deck reveal
-    if gs.game_phase == PHASE_CHOOSING_ULTIMATUM_CARD:  
-        lines.append(f"My deck: {[card.name for card in sorted(gs.me.deck, key=sort_key)]}")
-    # Ultimatum ultimatum
-    if gs.game_phase == PHASE_OPP_CHOOSING_FROM_ULTIMATUM:  
-        lines.append(f"Opp Ultimatum: {[card.name for card in sorted(gs.cache[1:3], key=sort_key)]}")
-    # Reconsider reveal
-    if gs.game_phase == PHASE_REORDERING_DECK_TOP3:
-        top2 = gs.me.deck[:3]
-        lines.append(f"My deck top 3 cards: {[card.name for card in sorted(top2, key=sort_key)]}")
-    # Standard info
-    if gs.me.hand:
-        lines.append(f"My Hand: {[card.name for card in sorted(gs.me.hand, key=sort_key)]}")
-    if gs.me.power_cards:
-        lines.append(f"My Power Cards: {[card.name for card in sorted(gs.me.power_cards, key=sort_key)]}")
-    if gs.me.battlefield:
-        lines.append(f"My Battlefield: {[(card.name, card.health) for card in sorted(gs.me.battlefield, key=sort_key)]}")
-    if gs.opp.battlefield:
-        lines.append(f"Opp Battlefield: {[(card.name, card.health) for card in sorted(gs.opp.battlefield, key=sort_key)]}")
-    if gs.me.graveyard:
-        lines.append(f"My Graveyard: {[card.name for card in sorted(gs.me.graveyard, key=sort_key)]}")
-    if gs.opp.graveyard:
-        lines.append(f"Opp Graveyard: {[card.name for card in sorted(gs.opp.graveyard, key=sort_key)]}")
-    if gs.me.monsters_pawn_buff:
-        lines.append("Monster's Pawn buff is active")
-    if gs.cache:
-        lines.append(f"Cache: {[card.name for card in sorted(gs.cache, key=sort_key)]}")
-
-    # Print card info in a basic way. Could be amended to display card art as well.
-    if gs.game_phase == PHASE_VIEWING_CARD_INFO:
-        lines.append(f"Power Cost: {gs.cache[0].power_cost}\n{gs.cache[0].card_text}")  # cache[0] is the resolving card that we need to access text from
-
-    return "\n".join(lines)
-
-def display_actions(gs):
-    lines = []
-    lines.append("Available Actions:")
-    
-    for action_id in range(num_actions):  # Assuming 20 possible actions
-        # print("Creating action: ", action_id)
-        action = create_action(gs, action_id)
-        legal, error = action.is_legal()
-        
-        if legal:
-            extra_info = ""
-            action_name = type(action).__name__  # Get the class name
-            if action_name in "SelectFromHand":
-                extra_info = f": {action.resolving_card.name}" if action.card_list else ""
-            if action_name == "SelectFromBattlefield":
-                extra_info = f": {action.target.name}" if action.card_list else ""
-            if action_name == "SelectFromOwnBattlefield":
-                extra_info = f": {action.sacrifice.name}" if action.card_list else ""
-            if action_name == "SelectFromOppHand":
-                extra_info = f": {action.discard.name}" if action.card_list else ""
-            if action_name == "SelectFromDeckTop2":
-                extra_info = f": {action.selected_card.name}" if action.card_list else ""
-            if action_name == "SelectFromGraveyard":
-                extra_info = f": {action.selected_card.name}" if action.card_list else ""
-            if action_name == "SelectFromDeck":
-                extra_info = f": {action.selected_card.name}" if action.card_list else ""
-            if action_name == "SelectFromUltimatum":
-                extra_info = f": {action.selected_card.name}" if action.card_list else ""
-            if action_name == "SelectFromDeckTop3":
-                extra_info = f": {action.selected_card.name}" if action.card_list else ""
-            lines.append(f"[{action_id}] {action_name}{extra_info}")
-        elif error != ERROR_INVALID_SELECTION:  # QOL, error invalid shows up too often and don't need to see it
-            lines.append(f"[{action_id}] (Invalid) {error}")
-        
-    return "\n".join(lines)
-
 class GameEngine:
     def __init__(self):
         self.gs = None
@@ -322,8 +231,8 @@ class GameEngine:
 
     def get_display_text(self):
         # Shows the information needed to play the game.
-        gamestate_text = display_gamestate(self.gs)
-        actions_text = display_actions(self.gs)
+        gamestate_text = self.display_gamestate(self.gs)
+        actions_text = self.display_actions(self.gs)
         return gamestate_text, actions_text
 
     def get_action_text(self, actions_text, action_id):
@@ -358,33 +267,54 @@ class GameEngine:
                     
         return valid_ids
 
-    def get_legal_sequences(self, all_sequences):
-        root = {"children": {}, "terminal": []}
+    def get_legal_sequences(self, boundaries, max_depth=8):
+        found_sequences = []
+        # Capture the starting phase to determine the stopping rules
+        start_phase = self.gs.game_phase
+        # Stack: (gamestate_dict, current_sequence_steps_list)
+        stack = [(self.gs.to_dict(), [])]
 
-        for seq in all_sequences:
-            node = root
-            for step in seq["steps"]:
-                aid = step["action_id"]
-                if aid not in node["children"]:
-                    node["children"][aid] = {"children": {}, "terminal": []}
-                node = node["children"][aid]
-            node["terminal"].append(seq)
+        while stack:
+            current_gs_dict, current_path = stack.pop()
+            if len(current_path) >= max_depth:
+                continue
 
-        legal = []
-        original_gs_dict = self.gs.to_dict()
+            # Check boundaries
+            if len(current_path) > 0:
+                is_game_over = current_gs_dict.get("winner") is not None
+                # Rule 1: Always stop if the game ends
+                if is_game_over:
+                    found_sequences.append({"steps": current_path})
+                    continue 
+                # Rule 2: Dynamic boundary checking
+                if start_phase == PHASE_AWAITING_INPUT:
+                    # Standard behavior: Stop at ANY boundary
+                    if current_gs_dict.get("game_phase") in boundaries:
+                        found_sequences.append({"steps": current_path})
+                        continue
+                else:
+                    # Special behavior: Stop at any *other* boundary
+                    if current_gs_dict.get("game_phase") != start_phase:
+                        found_sequences.append({"steps": current_path})
+                        continue
 
-        def dfs(node, gs_dict):
-            legal.extend(node["terminal"])
+            # Explore actions
+            for action_id in range(self.num_actions):
+                legal, text_or_error = self.get_action_info(
+                    GameState.from_dict(current_gs_dict), action_id
+                )
+                if legal:
+                    next_gs = GameState.from_dict(current_gs_dict)  # also from the clean source
+                    next_action = create_action(next_gs, action_id)
+                    success, _ = next_action.enact()
 
-            for action_id, child_node in node["children"].items():
-                test_gs = GameState.from_dict(gs_dict)
-                action = create_action(test_gs, int(action_id))
-                is_legal, reason = action.enact()
-                if is_legal:
-                    dfs(child_node, test_gs.to_dict())
-
-        dfs(root, original_gs_dict)
-        return legal
+                    if success:
+                        step_info = {
+                            "action_id": action_id,
+                            "action_text": text_or_error
+                        }
+                        stack.append((next_gs.to_dict(), current_path + [step_info]))
+        return found_sequences
 
     def get_results(self):
         # Returns a result if there is one. If game isn't over, returns None.
@@ -398,3 +328,137 @@ class GameEngine:
             return rewards
         else:
             return None
+    
+    def display_gamestate(self, gs):
+        lines = []
+        sort_key = lambda card: card.name  # or uid
+
+        # Red and purple for Monser, green and yellow for hero
+        if gs.turn_priority == "monster":
+            lines.append(f"{gs.turn_priority.upper()}'s TURN (Turn {gs.turn_number})")
+        else:
+            lines.append(f"{gs.turn_priority.upper()}'s TURN (Turn {gs.turn_number})")
+        lines.append(f"Game Phase: {gs.game_phase}")
+        lines.append(f"My Health: {gs.me.health} | My Deck Size: {len(gs.me.deck)} | My Power: {gs.me.power}")
+        lines.append(f"Opp Health: {gs.opp.health} | Opp Deck Size: {len(gs.opp.deck)} | Opp Hand Size: {len(gs.opp.hand)} | Opp Power Cards: {len(gs.opp.power_cards)}")
+
+        # These are for extra info not always present
+        # Noble Sacrifice hand reveal
+        if gs.game_phase == PHASE_DISCARDING_CARD_FROM_OPP_HAND:  
+            lines.append(f"Opp hand: {[card.name for card in sorted(gs.opp.hand, key=sort_key)]}")
+        # Peek top2 reveal
+        if gs.game_phase == "choosing from Peek":
+            top2 = gs.me.deck[:2]
+            lines.append(f"My deck top 2 cards: {[card.name for card in sorted(top2, key=sort_key)]}")
+        # Ultimatum deck reveal
+        if gs.game_phase == PHASE_CHOOSING_ULTIMATUM_CARD:  
+            lines.append(f"My deck: {[card.name for card in sorted(gs.me.deck, key=sort_key)]}")
+        # Ultimatum ultimatum
+        if gs.game_phase == PHASE_OPP_CHOOSING_FROM_ULTIMATUM:  
+            lines.append(f"Opp Ultimatum: {[card.name for card in sorted(gs.cache[1:3], key=sort_key)]}")
+        # Reconsider reveal
+        if gs.game_phase == PHASE_REORDERING_DECK_TOP3:
+            top2 = gs.me.deck[:3]
+            lines.append(f"My deck top 3 cards: {[card.name for card in sorted(top2, key=sort_key)]}")
+        # Standard info
+        if gs.me.hand:
+            lines.append(f"My Hand: {[card.name for card in sorted(gs.me.hand, key=sort_key)]}")
+        if gs.me.power_cards:
+            lines.append(f"My Power Cards: {[card.name for card in sorted(gs.me.power_cards, key=sort_key)]}")
+        if gs.me.battlefield:
+            lines.append(f"My Battlefield: {[(card.name, f"{card.health}hp") for card in sorted(gs.me.battlefield, key=sort_key)]}")
+        if gs.opp.battlefield:
+            lines.append(f"Opp Battlefield: {[(card.name, f"{card.health}hp") for card in sorted(gs.opp.battlefield, key=sort_key)]}")
+        if gs.me.graveyard:
+            lines.append(f"My Graveyard: {[card.name for card in sorted(gs.me.graveyard, key=sort_key)]}")
+        if gs.opp.graveyard:
+            lines.append(f"Opp Graveyard: {[card.name for card in sorted(gs.opp.graveyard, key=sort_key)]}")
+        if gs.me.monsters_pawn_buff:
+            lines.append("Monster's Pawn buff is active")
+        if gs.cache:
+            lines.append(f"Cache: {[card.name for card in sorted(gs.cache, key=sort_key)]}")
+
+        # Print card info in a basic way. Could be amended to display card art as well.
+        if gs.game_phase == PHASE_VIEWING_CARD_INFO:
+            lines.append(f"Power Cost: {gs.cache[0].power_cost}\n{gs.cache[0].card_text}")  # cache[0] is the resolving card that we need to access text from
+
+        return "\n".join(lines)
+
+    def get_action_info(self, gs, action_id):
+        """
+        Helper to check legality and generate the text description of an action.
+        Returns: (is_legal, text_description)
+        """
+        action = create_action(gs, action_id)
+        legal, error = action.is_legal()
+
+        if not legal:
+            return False, error
+
+        action_name = type(action).__name__
+        custom_info = ""
+
+        # Dynamic description logic
+        if action_name == "SelectFromHand" and hasattr(action, 'card_list') and action.card_list:
+            custom_info = f"Select {action.resolving_card.name} from hand"
+        
+        elif action_name == "SelectFromBattlefield" and hasattr(action, 'card_list') and action.card_list:
+            custom_info = f"Deal damage to {action.target.name}"
+        
+        elif action_name == "SelectFromOwnBattlefield" and hasattr(action, 'card_list') and action.card_list:
+            custom_info = f"Sacrifice {action.sacrifice.name}"
+        
+        elif action_name == "SelectFromOppHand" and hasattr(action, 'card_list') and action.card_list:
+            custom_info = f"Discard {action.discard.name}"
+        
+        elif action_name == "SelectFromDeckTop2" and hasattr(action, 'card_list') and action.card_list:
+            custom_info = f"Add {action.selected_card.name} to hand"
+        
+        elif action_name == "SelectFromGraveyard" and hasattr(action, 'card_list') and action.card_list:
+            custom_info = f"Shuffle {action.selected_card.name} into deck"
+        
+        elif action_name == "SelectFromDeck" and hasattr(action, 'card_list') and action.card_list:
+            custom_info = f"Add {action.selected_card.name} to ultimatum"
+        
+        elif action_name == "SelectFromUltimatum" and hasattr(action, 'card_list') and action.card_list:
+            custom_info = f"Put {action.selected_card.name} into opponent's hand"
+        
+        elif action_name == "SelectFromDeckTop3" and hasattr(action, 'card_list') and action.card_list:
+            custom_info = f"Reorder {action.selected_card.name}"
+
+        elif action_name == "EndTurn":
+            custom_info = "End turn"
+        
+        elif action_name == "PlayFaceUp":
+            custom_info = "Play face up"
+
+        elif action_name == "PlayFaceDown":
+            custom_info = "Play face down"
+        
+        elif action_name == "GetCardInfo":
+            custom_info = "View card info"
+        
+        elif action_name == "Cancel":
+            custom_info = "Cancel action"
+
+        elif action_name == "TargetHero":
+            custom_info = "Target hero"
+        
+        elif action_name == "TargetMonster":
+            custom_info = "Target monster"
+
+        return True, f"[{action_id}] {custom_info}"
+
+    def display_actions(self, gs):
+        lines = ["Available Actions:"]
+        
+        for action_id in range(self.num_actions):
+            legal, result = self.get_action_info(gs, action_id)
+            
+            if legal:
+                lines.append(result)
+            elif result != ERROR_INVALID_SELECTION:
+                # result contains the error message here
+                lines.append(f"[{action_id}] (Invalid) {result}")
+            
+        return "\n".join(lines)

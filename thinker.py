@@ -1,12 +1,8 @@
 import hashlib
 import logging
-from pydantic import BaseModel
+import re
 
 logger = logging.getLogger(__name__)
-
-class SequenceChoice(BaseModel):
-    reasoning: str
-    choice: int
 
 RULES_PROMPT = """HOW TO PLAY POKER MONSTER:
 Object/ways to win: Each player starts with 15 health, and a 20-card deck. The first player to run out of health or cards in their deck loses the game.
@@ -55,13 +51,14 @@ SEQUENCE_CHOICE_PROMPT = """{rules}
 CURRENT GAME STATE:
 {gamestate_text}
 
-AVAILABLE PLAYS:
+AVAILABLE PLAYS (including winrate if available):
 {choices_text}
 
 INSTRUCTIONS:
 You are playing this card game. Each play above is a complete sequence of actions that has been verified as legal. Choose the one that best advances your position. Try your best to win the game, as though you were trying to become a professional player.
 
-Respond with your reasoning and the choice number."""
+Respond with your 3-5 sentences of reasoning, then output your final answer on its own line in the format:
+CHOICE: <number>"""
 
 def signature_hash(signature: tuple) -> str:
     """Deterministic hash of a sequence signature for dedup."""
@@ -82,11 +79,21 @@ class Thinker:
         self.embedder = embedder
         self.llm = llm
 
-    def choose_sequence(self, legal_sequences, gamestate_text):
+    def choose_sequence(self, legal_sequences, gamestate_text, graph=None):
         lines = []
-        for i, seq in enumerate(legal_sequences):
+        for i, seq in enumerate(legal_sequences[:40]):
             desc = describe_sequence(seq["steps"])
-            lines.append(f"[{i}] {desc}")
+            line = f"[{i}] {desc}"
+
+            if graph:
+                action_ids = tuple(str(s["action_id"]) for s in seq["steps"])
+                action_sig = signature_hash(action_ids)
+                stats = graph.get_sequence_stats(action_sig)
+                if stats is not None and stats['total'] >= 3:
+                    winrate = stats['wins'] / stats['total'] * 100
+                    line += f" ({winrate:.0f}% WR, n={stats['total']})"
+
+            lines.append(line)
         choices_text = "\n".join(lines)
 
         prompt = SEQUENCE_CHOICE_PROMPT.format(
@@ -96,21 +103,38 @@ class Thinker:
         )
 
         try:
-            response = self.llm.client.beta.chat.completions.parse(
-                model=self.llm.model_name,
-                messages=[{"role": "user", "content": prompt}],
-                response_format=SequenceChoice,
-            )
-            result = response.choices[0].message.parsed
-            logger.info(f"LLM chose [{describe_sequence(legal_sequences[result.choice]['steps'])}]: {result.reasoning[:120]}...")
+            response = self.llm.invoke(prompt, temperature=0.3)
+            choice, reasoning = self._parse_choice(response, len(legal_sequences))
+            logger.info(f"LLM chose [{describe_sequence(legal_sequences[choice]['steps'])}]: {reasoning}")
 
-            if 0 <= result.choice < len(legal_sequences):
-                return legal_sequences[result.choice]
-            else:
-                logger.warning(f"Invalid choice {result.choice}, falling back to first")
-                return legal_sequences[0]
+            return legal_sequences[choice]
 
         except Exception as e:
             logger.error(f"Sequence choice failed: {e}, falling back to random")
             import random
             return random.choice(legal_sequences)
+
+    @staticmethod
+    def _parse_choice(response: str, num_choices: int) -> tuple[int, str]:
+        """Extract the choice number and reasoning from LLM response."""
+        if not response:
+            return 0, ""
+
+        # Split reasoning from the CHOICE line
+        reasoning = ""
+        match = re.search(r"CHOICE:\s*(\d+)", response, re.IGNORECASE)
+        if match:
+            reasoning = response[:match.start()].strip()
+            val = int(match.group(1))
+            if 0 <= val < num_choices:
+                return val, reasoning
+
+        # Fallback: find the last bare integer in the response
+        numbers = re.findall(r"\b(\d+)\b", response)
+        for num_str in reversed(numbers):
+            val = int(num_str)
+            if 0 <= val < num_choices:
+                return val, response.strip()
+
+        logger.warning(f"Could not parse choice from response, defaulting to 0")
+        return 0, response.strip()
